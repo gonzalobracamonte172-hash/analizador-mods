@@ -15,12 +15,11 @@ Archivos
 
 Uso (más seguro — descargar y revisar)
 1. Descargar el script:
-   powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb 'https://raw.githubusercontent.com/gonzalobracamonte172-hash/analizador-mods/main/DoomsDayDetector.ps1' -OutFile .\DoomsDayDetector.ps1'"
+   powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb 'https://raw.githubusercontent.com/elsombrio/analizador-mods/main/DoomsDayDetector.ps1' -OutFile .\DoomsDayDetector.ps1'"
 2. Abrir y revisar:
    notepad .\DoomsDayDetector.ps1
 3. Ejecutar:
    powershell -NoProfile -ExecutionPolicy Bypass -File .\DoomsDayDetector.ps1
 
 One-liner (ejecuta sin revisar — MENOS SEGURO)
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iex (iwr -useb 'https://raw.githubusercontent.com/gonzalobracamonte172-hash/analizador-mods/main/DoomsDayDetector.ps1')"
-
+ powershell -NoProfile -ExecutionPolicy Bypass -Command "iex (iwr -useb 'https://raw.githubusercontent.com/elsombrio/analizador-mods/main/DoomsDayDetector.ps1')"
