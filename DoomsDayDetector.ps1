@@ -1,15 +1,15 @@
 chcp 65001 > $null
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$OutputEncoding = [System.Text.Encoding]::UTF8
+
 Clear-Host
 
 # ============================================================
-# CONFIGURACIÓN
+# EL-SOMBRIO FORENSIC SCANNER
 # ============================================================
 
-$defaultPath = "$env:APPDATA\.minecraft\mods"
+$script:DefaultModsPath = "$env:APPDATA\.minecraft\mods"
 
-$illegalKeywords = @(
+$script:IllegalKeywords = @(
     "autototem",
     "freecam",
     "aimbot",
@@ -24,389 +24,486 @@ $illegalKeywords = @(
     "rocket"
 )
 
-$suspiciousKeywords = @(
+$script:SuspiciousKeywords = @(
     "autohost",
     "autotoolset",
-    "autotten"
+    "autototten"
 )
 
 # ============================================================
-# FUNCIONES DE INTERFAZ
+# ESTADÍSTICAS
 # ============================================================
 
-function Show-Header {
-n    Clear-Host
-n    Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "  ║                                              ║" -ForegroundColor Cyan
-    Write-Host "  ║              E L - S O M B R I O             ║" -ForegroundColor Cyan
-    Write-Host "  ║                                              ║" -ForegroundColor Cyan
-    Write-Host "  ║                 MOD ANALYZER                ║" -ForegroundColor DarkCyan
-    Write-Host "  ║                                              ║" -ForegroundColor Cyan
-    Write-Host "  ╚══════════════════════════════════════════════╝" -ForegroundColor Cyan
+$script:ScanInfo = [ordered]@{
+    ModsAnalizados       = 0
+    ModsNormales         = 0
+    ModsSospechosos      = 0
+    ModsIlegales         = 0
+    ArchivosCamuflados   = 0
+
+    DrivesAnalizados     = 0
+    EXEEncontrados       = 0
+    DLLEncontradas       = 0
+    JAREncontrados       = 0
+
+    JARAnalizados        = 0
+    JARSospechosos       = 0
+    FirmasDetectadas     = 0
+
+    ServiciosRunning       = 0
+    ServiciosStopped       = 0
+    ServiciosNoEncontrados = 0
+}
+
+# ============================================================
+# SERVICIOS A COMPROBAR
+# ============================================================
+
+$script:WindowsServices = @(
+    "dps",
+    "appinfo",
+    "pcasvc",
+    "eventlog",
+    "sysmain",
+    "dusmsvc",
+    "bam"
+)
+
+# ============================================================
+# UTILIDADES
+# ============================================================
+
+function Pause-Scanner {
+    Write-Host ""
+    Write-Host "  Presiona ENTER para continuar..." -ForegroundColor DarkGray
+    Read-Host
+}
+
+function Show-Line {
+    Write-Host "  ----------------------------------------------------------------" -ForegroundColor DarkGray
+}
+
+function Show-Title {
+    param(
+        [string]$Title
+    )
+
+    Clear-Host
+
+    Write-Host ""
+    Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host ("  ║{0,-62}║" -f $Title) -ForegroundColor Cyan
+    Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
 }
 
-function Show-Progress {
-n    param(
-        [int]$Current,
-        [int]$Total,
-        [string]$Text
+function Test-Administrator {
+n    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+n    return $principal.IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
     )
-n    $width = 42
-n    if ($Total -le 0) {
+}
+
+function Get-FileSHA1 {
+    param(
+        [string]$Path
+    )
+
+    try {
+        return (Get-FileHash -Algorithm SHA1 -LiteralPath $Path).Hash
+    }
+    catch {
+        return $null
+    }
+}
+
+# ============================================================
+# REINICIAR ESTADÍSTICAS
+# ============================================================
+
+function Reset-ScanInfo {
+n    $script:ScanInfo.ModsAnalizados       = 0
+    $script:ScanInfo.ModsNormales        = 0
+    $script:ScanInfo.ModsSospechosos     = 0
+    $script:ScanInfo.ModsIlegales        = 0
+    $script:ScanInfo.ArchivosCamuflados  = 0
+n    $script:ScanInfo.DrivesAnalizados    = 0
+    $script:ScanInfo.EXEEncontrados      = 0
+    $script:ScanInfo.DLLEncontradas      = 0
+    $script:ScanInfo.JAREncontrados      = 0
+n    $script:ScanInfo.JARAnalizados       = 0
+    $script:ScanInfo.JARSospechosos      = 0
+    $script:ScanInfo.FirmasDetectadas    = 0
+n    $script:ScanInfo.ServiciosRunning       = 0
+    $script:ScanInfo.ServiciosStopped       = 0
+    $script:ScanInfo.ServiciosNoEncontrados = 0
+}
+
+# ============================================================
+# SERVICIOS WINDOWS
+# ============================================================
+
+function Get-WindowsServiceStatus {
+    $results = @()
+    $script:ScanInfo.ServiciosRunning       = 0
+    $script:ScanInfo.ServiciosStopped       = 0
+    $script:ScanInfo.ServiciosNoEncontrados = 0
+    foreach ($service in $script:WindowsServices) {
+        # sc.exe se ejecuta dentro de la misma terminal PowerShell
+        $output = @(
+            & sc.exe query $service 2>&1
+        )
+        $text = ($output -join "`n")
+        $state = "DESCONOCIDO"
+        if ($text -match '(?im)^\s*(ESTADO|STATE)\s*:\s*4\s+RUNNING') {
+            $state = "RUNNING"
+            $script:ScanInfo.ServiciosRunning++
+        }
+        elseif ($text -match '(?im)^\s*(ESTADO|STATE)\s*:\s*1\s+STOPPED') {
+            $state = "STOPPED"
+            $script:ScanInfo.ServiciosStopped++
+        }
+        elseif ($text -match '1060') {
+            $state = "NO ENCONTRADO"
+            $script:ScanInfo.ServiciosNoEncontrados++
+        }
+        $results += [PSCustomObject]@{
+            Nombre = $service
+            Estado = $state
+            Raw    = $output
+        }
+    }
+    return $results
+}
+
+# ============================================================
+# INTERFAZ DIRECTA: SERVICIOS WINDOWS
+# ============================================================
+
+function Show-WindowsServices {
+    Show-Title "SERVICIOS WINDOWS"
+    $services = Get-WindowsServiceStatus
+    Write-Host "  RESUMEN" -ForegroundColor Cyan
+    Show-Line
+    Write-Host ""
+    Write-Host "  - RUNNING       : $($script:ScanInfo.ServiciosRunning)" -ForegroundColor Green
+    Write-Host "  - STOPPED       : $($script:ScanInfo.ServiciosStopped)" -ForegroundColor Yellow
+    Write-Host "  - NO ENCONTRADO : $($script:ScanInfo.ServiciosNoEncontrados)" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  ESTADO DE SERVICIOS" -ForegroundColor Cyan
+    Show-Line
+    foreach ($service in $services) {
+        switch ($service.Estado) {
+            "RUNNING" {
+                $color = "Green"
+            }
+            "STOPPED" {
+                $color = "Yellow"
+            }
+            "NO ENCONTRADO" {
+                $color = "Red"
+            }
+            default {
+                $color = "Gray"
+            }
+        }
+        Write-Host ""
+        Write-Host "  - $($service.Nombre)" -ForegroundColor White
+        Write-Host "      ESTADO : $($service.Estado)" -ForegroundColor $color
+    }
+    Write-Host ""
+    Show-Line
+    Write-Host ""
+    Write-Host "  INFORMACIÓN COMPLETA DE SC QUERY" -ForegroundColor Cyan
+    Show-Line
+    foreach ($service in $services) {
+        Write-Host ""
+        Write-Host "  ╔─ - $($service.Nombre)" -ForegroundColor Yellow
+        foreach ($line in $service.Raw) {
+            if ([string]::IsNullOrWhiteSpace($line)) {                continue
+            }
+            Write-Host "  ║  $($line.ToString().TrimEnd())" -ForegroundColor White
+        }
+        Write-Host "  ╚──────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+    Write-Host "  La información fue obtenida con sc.exe desde esta terminal." -ForegroundColor DarkGray
+    Write-Host "  No se abrió ninguna ventana CMD." -ForegroundColor DarkGray
+    Pause-Scanner
+}
+
+# ============================================================
+# TABLA GENERAL
+# ============================================================
+
+function Show-InformationTable {
+    Show-Title "TABLA DE INFORMACIÓN"
+    Write-Host "  MODS" -ForegroundColor Cyan
+    Show-Line
+    Write-Host "  - Mods analizados       : $($script:ScanInfo.ModsAnalizados)"
+    Write-Host "  - Mods normales         : $($script:ScanInfo.ModsNormales)"
+    Write-Host "  - Mods sospechosos      : $($script:ScanInfo.ModsSospechosos)"
+    Write-Host "  - Mods ilegales         : $($script:ScanInfo.ModsIlegales)"
+    Write-Host "  - Archivos camuflados   : $($script:ScanInfo.ArchivosCamuflados)"
+    Write-Host ""
+    Write-Host "  DOOMSDAY" -ForegroundColor Cyan
+    Show-Line
+    Write-Host "  - Drives analizados     : $($script:ScanInfo.DrivesAnalizados)"
+    Write-Host "  - EXE encontrados       : $($script:ScanInfo.EXEEncontrados)"
+    Write-Host "  - DLL encontradas       : $($script:ScanInfo.DLLEncontradas)"
+    Write-Host "  - JAR encontrados       : $($script:ScanInfo.JAREncontrados)"
+    Write-Host "  - JAR analizados        : $($script:ScanInfo.JARAnalizados)"
+    Write-Host "  - JAR sospechosos       : $($script:ScanInfo.JARSospechosos)"
+    Write-Host "  - Firmas detectadas     : $($script:ScanInfo.FirmasDetectadas)"
+    Write-Host ""
+    Write-Host "  SERVICIOS WINDOWS" -ForegroundColor Cyan
+    Show-Line
+    Write-Host "  - RUNNING              : $($script:ScanInfo.ServiciosRunning)" -ForegroundColor Green
+    Write-Host "  - STOPPED              : $($script:ScanInfo.ServiciosStopped)" -ForegroundColor Yellow
+    Write-Host "  - NO ENCONTRADOS       : $($script:ScanInfo.ServiciosNoEncontrados)" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Servicios comprobados:" -ForegroundColor Gray
+    foreach ($service in $script:WindowsServices) {
+        Write-Host "  - $service" -ForegroundColor White
+    }
+    Pause-Scanner
+}
+
+# ============================================================
+# ANALIZAR MODS
+# ============================================================
+
+function Start-ModScan {
+    Show-Title "ANÁLISIS DE MODS"
+    $modsPath = Read-Host "  Ruta de mods [$($script:DefaultModsPath)]"
+    if ([string]::IsNullOrWhiteSpace($modsPath)) {
+        $modsPath = $script:DefaultModsPath
+    }
+    if (-not (Test-Path -LiteralPath $modsPath)) {
+        Write-Host ""
+        Write-Host "  [!] La carpeta no existe." -ForegroundColor Red
+        Pause-Scanner
         return
     }
-n    $percent = [math]::Round(($Current / $Total) * 100)
-n    $filled = [math]::Floor(($percent / 100) * $width)
-    $empty = $width - $filled
-n    $bar = ("█" * $filled) + ("░" * $empty)
-
-    Write-Host "`r  [$bar] $percent%  $Text" -NoNewline -ForegroundColor Cyan
-}
-
-# ============================================================
-# INICIO
-# ============================================================
-
-Show-Header
-nWrite-Host "  ANALIZADOR DE MODS" -ForegroundColor White
-Write-Host "  ──────────────────────────────────────────────" -ForegroundColor DarkGray
-Write-Host ""
-
-Write-Host "  Verificación mediante hashes y Modrinth." -ForegroundColor DarkGray
-Write-Host ""
-
-$modsPath = Read-Host "  Ruta de la carpeta de mods [Enter = predeterminada]"
-nif ([string]::IsNullOrWhiteSpace($modsPath)) {
-    $modsPath = $defaultPath
-}
-nif (-not (Test-Path $modsPath)) {
-n    Write-Host ""
-    Write-Host "  ✕ No se encontró la carpeta." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "    $modsPath" -ForegroundColor DarkGray
-    Write-Host ""
-n    Read-Host "  Pulsa Enter para salir"
-    exit
-}
-
-$jars = @(Get-ChildItem -Path $modsPath -Filter *.jar -File)
-nif ($jars.Count -eq 0) {
-n    Write-Host ""
-    Write-Host "  ! No se encontraron archivos .jar." -ForegroundColor Yellow
-    Write-Host ""
-n    Read-Host "  Pulsa Enter para salir"
-    exit
-}
-
-# ============================================================
-# INFORMACIÓN DEL ESCANEO
-# ============================================================
-
-Show-Header
-
-Write-Host "  ESCANEO PREPARADO" -ForegroundColor White
-Write-Host "  ──────────────────────────────────────────────" -ForegroundColor DarkGray
-Write-Host ""
-
-Write-Host "  Carpeta" -ForegroundColor DarkGray
-Write-Host "  $modsPath" -ForegroundColor White
-Write-Host ""
-
-Write-Host "  Archivos encontrados : " -NoNewline -ForegroundColor DarkGray
-Write-Host "$($jars.Count)" -ForegroundColor Cyan
-
-Write-Host ""
-Write-Host "  Iniciando análisis..." -ForegroundColor DarkGray
-
-Start-Sleep -Milliseconds 700
-
-# ============================================================
-# PASO 1 - HASHES
-# ============================================================
-
-Show-Header
-
-Write-Host "  ANALIZANDO MODS" -ForegroundColor White
-Write-Host "  ──────────────────────────────────────────────" -ForegroundColor DarkGray
-Write-Host ""
-
-Write-Host "  PASO 1 / 3" -ForegroundColor Cyan
-Write-Host "  Calculando hashes SHA1..." -ForegroundColor DarkGray
-Write-Host ""
-
-$hashMap = @{}
-$i = 0
-
-foreach ($jar in $jars) {
-n    $i++
-
-    $hash = (
-        Get-FileHash `
-        -Path $jar.FullName `
-        -Algorithm SHA1
-    ).Hash.ToLower()
-
-    $hashMap[$hash] = $jar
-
-    Show-Progress `
-        -Current $i `
-        -Total $jars.Count `
-        -Text "Procesando archivos"
-}
-
-Write-Host ""
-Write-Host ""
-Write-Host "  ✓ Hashes completados" -ForegroundColor Green
-
-Start-Sleep -Milliseconds 500
-
-# ============================================================
-# PASO 2 - MODRINTH
-# ============================================================
-
-Show-Header
-
-Write-Host "  ANALIZANDO MODS" -ForegroundColor White
-Write-Host "  ──────────────────────────────────────────────" -ForegroundColor DarkGray
-Write-Host ""
-
-Write-Host "  PASO 2 / 3" -ForegroundColor Cyan
-Write-Host "  Consultando Modrinth..." -ForegroundColor DarkGray
-Write-Host ""
-
-$modrinthData = @{}
-ntry {
-n    $body = @{
-        hashes = @($hashMap.Keys)
-        algorithm = "sha1"
-    } | ConvertTo-Json
-n    $modrinthData = Invoke-RestMethod `
-        -Uri "https://api.modrinth.com/v2/version_files" `
-        -Method Post `
-        -Body $body `
-        -ContentType "application/json"
-n    Write-Host "  ✓ Base de datos consultada correctamente" -ForegroundColor Green
-} catch {
-n    Write-Host "  ! No se pudo conectar a Modrinth" -ForegroundColor Yellow
-    Write-Host "    Se continuará con el análisis local." -ForegroundColor DarkGray
-}
-
-Start-Sleep -Milliseconds 700
-
-# ============================================================
-# PASO 3 - CLASIFICACIÓN
-# ============================================================
-
-Show-Header
-
-Write-Host "  ANALIZANDO MODS" -ForegroundColor White
-Write-Host "  ──────────────────────────────────────────────" -ForegroundColor DarkGray
-Write-Host ""
-
-Write-Host "  PASO 3 / 3" -ForegroundColor Cyan
-Write-Host "  Clasificando archivos..." -ForegroundColor DarkGray
-Write-Host ""
-
-$modList = @()
-$i = 0
-total = $hashMap.Count
-
-foreach ($h in $hashMap.Keys) {
-n    $i++
-
-    $jar = $hashMap[$h]
-    $info = $modrinthData.$h
-n    $nameForCheck = $jar.BaseName.ToLower()
-n    if ($info) {
-n        $displayName = "$($info.name) (v$($info.version_number))"
-        $estado = "VERIFICADO"
+    $jars = @(Get-ChildItem -LiteralPath $modsPath -Filter "*.jar" -File -ErrorAction SilentlyContinue)
+    if ($jars.Count -eq 0) {
+        Write-Host ""
+        Write-Host "  [!] No se encontraron archivos JAR." -ForegroundColor Yellow
+        Pause-Scanner
+        return
     }
-    else {
-n        $displayName = $jar.BaseName
-        $estado = "NO IDENTIFICADO"
+    $script:ScanInfo.ModsAnalizados = $jars.Count
+    Write-Host ""
+    Write-Host "  Mods encontrados: $($jars.Count)" -ForegroundColor Cyan
+    Write-Host ""
+    foreach ($jar in $jars) {
+        $name = $jar.BaseName.ToLower()
+        $illegal = $false
+        $suspicious = $false
+        foreach ($keyword in $script:IllegalKeywords) {
+            if ($name -like "*$keyword*") {
+                $illegal = $true
+                break
+            }
+        }
+        if (-not $illegal) {
+            foreach ($keyword in $script:SuspiciousKeywords) {
+                if ($name -like "*$keyword*") {
+                    $suspicious = $true
+                    break
+                }
+            }
+        }
+        if ($illegal) {
+            $script:ScanInfo.ModsIlegales++
+            Write-Host "  X " -NoNewline -ForegroundColor Red
+            Write-Host "- $($jar.Name)" -ForegroundColor White
+        }
+        elseif ($suspicious) {
+            $script:ScanInfo.ModsSospechosos++
+            Write-Host "  ! " -NoNewline -ForegroundColor Yellow
+            Write-Host "- $($jar.Name)" -ForegroundColor White
+        }
+        else {
+            $script:ScanInfo.ModsNormales++
+            Write-Host "  + " -NoNewline -ForegroundColor Green
+            Write-Host "- $($jar.Name)" -ForegroundColor White
+        }
     }
-n    $matchIllegal = $illegalKeywords |
+    # Archivos que intentan parecer mods pero no son JAR
+    $otherFiles = @(
+        Get-ChildItem -LiteralPath $modsPath -File -ErrorAction SilentlyContinue |
         Where-Object {
-            $nameForCheck -like "*$_*"
+            $_.Extension -ne ".jar" -and
+            $_.BaseName -match "autoclick"
         }
-n    $matchSuspicious = $suspiciousKeywords |
-        Where-Object {
-            $nameForCheck -like "*$_*"
-        }
-n    if ($matchIllegal) {
-n        $categoria = "ILEGAL"
-        $color = "Red"
+    )
+    $script:ScanInfo.ArchivosCamuflados = $otherFiles.Count
+    foreach ($file in $otherFiles) {
+        Write-Host "  ! " -NoNewline -ForegroundColor Yellow
+        Write-Host "- $($file.Name) [CAMUFLADO]" -ForegroundColor White
     }
-    elseif ($matchSuspicious) {
-n        $categoria = "SOSPECHOSO"
-        $color = "Yellow"
+    $report = Join-Path $modsPath "analisis_mods.txt"
+    @(
+        "EL-SOMBRIO FORENSIC SCANNER"
+        "ANÁLISIS DE MODS"
+        "============================"
+        ""
+        "Mods analizados      : $($script:ScanInfo.ModsAnalizados)"
+        "Mods normales        : $($script:ScanInfo.ModsNormales)"
+        "Mods sospechosos     : $($script:ScanInfo.ModsSospechosos)"
+        "Mods ilegales        : $($script:ScanInfo.ModsIlegales)"
+        "Archivos camuflados  : $($script:ScanInfo.ArchivosCamuflados)"
+        ""
+        "ARCHIVOS:"
+    ) | Out-File -FilePath $report -Encoding UTF8
+    foreach ($jar in $jars) {
+        "- $($jar.Name)" | Out-File -FilePath $report -Append -Encoding UTF8
     }
-    else {
-n        $categoria = "NORMAL"
-        $color = "Green"
-    }
-n    $modList += [PSCustomObject]@{
-        DisplayName = $displayName
-        Estado      = $estado
-        Archivo     = $jar.Name
-        Categoria   = $categoria
-        Color       = $color
-    }
-n    Show-Progress `
-        -Current $i `
-        -Total $total `
-        -Text "Clasificando mods"
+    Write-Host ""
+    Write-Host "  [OK] Análisis terminado." -ForegroundColor Green
+    Write-Host "  [OK] Reporte: $report" -ForegroundColor Gray
+    Pause-Scanner
 }
 
 # ============================================================
-# ARCHIVOS CAMUFLADOS
+# FIRMAS DOOMSDAY
 # ============================================================
 
-Get-ChildItem -Path $modsPath -File |
-    Where-Object {
-        $_.Extension -ne ".jar" -and
-        $_.BaseName.ToLower() -like "*autoclick*"
-    } |
-    ForEach-Object {
-n        $modList += [PSCustomObject]@{
-            DisplayName = $_.BaseName
-            Estado      = "ARCHIVO CAMUFLADO"
-            Archivo     = $_.Name
-            Categoria   = "ILEGAL"
-            Color       = "Magenta"
-        }
-    }
-nWrite-Host ""
-Write-Host ""
-Write-Host "  ✓ Clasificación completada" -ForegroundColor Green
-
-Start-Sleep -Milliseconds 800
-
-# ============================================================
-# RESULTADOS
-# ============================================================
-
-Show-Header
-
-$modListSorted = @(
-    $modList | Sort-Object DisplayName
+$script:KnownHexPatterns = @(
+    "6161370E160609949E0029033EA7000A2C1D03548403011D1008A1FFF6033EA7000A2B1D03548403011D07A1FFF710FEAC150599001A2A160C14005C6588B800",
+    "0C1504851D85160A6161370E160609949E0029033EA7000A2C1D03548403011D1008A1FFF6033EA7000A2B1D03548403011D07A1FFF710FEAC150599001A2A16",
+    "5910071088544C2A2BB8004D3B033DA7000A2B1C03548402011C1008A1FFF61A9E000C1A110800A2000503AC04AC00000000000A0005004E000101FA000001D3"
 )
-n$illegalCount = @(
-    $modListSorted |
-    Where-Object {
-        $_.Categoria -eq "ILEGAL"
+
+$script:KnownClassPatterns = @(
+    "net/java/f",
+    "net/java/g",
+    "net/java/h",
+    "net/java/i",
+    "net/java/k",
+    "net/java/l",
+    "net/java/m",
+    "net/java/r",
+    "net/java/s",
+    "net/java/t",
+    "net/java/y"
+)
+
+function ConvertHex-ToBytes {
+    param(
+        [string]$Hex
+    )
+    $bytes = New-Object byte[] ($Hex.Length / 2)
+    for ($i = 0; $i -lt $Hex.Length; $i += 2) {
+        $bytes[$i / 2] = [Convert]::ToByte(
+            $Hex.Substring($i, 2),
+            16
+        )
     }
-).Count
+    return $bytes
+}
 
-$suspiciousCount = @(
-    $modListSorted |
-    Where-Object {
-        $_.Categoria -eq "SOSPECHOSO"
+function Search-BytePattern {
+    param(
+        [byte[]]$Data,
+        [byte[]]$Pattern
+    )
+    if ($Pattern.Length -gt $Data.Length) {
+        return $false
     }
-).Count
-
-$normalCount = @(
-    $modListSorted |
-    Where-Object {
-        $_.Categoria -eq "NORMAL"
-    }
-).Count
-
-# ============================================================
-# RESUMEN
-# ============================================================
-
-Write-Host "  RESULTADOS DEL ANALISIS" -ForegroundColor White
-Write-Host "  ──────────────────────────────────────────────" -ForegroundColor DarkGray
-Write-Host ""
-
-Write-Host "  TOTAL        : " -NoNewline -ForegroundColor DarkGray
-Write-Host "$($modListSorted.Count)" -ForegroundColor Cyan
-
-Write-Host "  ILEGALES     : " -NoNewline -ForegroundColor DarkGray
-Write-Host "$illegalCount" -ForegroundColor Red
-
-Write-Host "  SOSPECHOSOS  : " -NoNewline -ForegroundColor DarkGray
-Write-Host "$suspiciousCount" -ForegroundColor Yellow
-
-Write-Host "  NORMALES     : " -NoNewline -ForegroundColor DarkGray
-Write-Host "$normalCount" -ForegroundColor Green
-
-Write-Host ""
-
-# ============================================================
-# LISTA DE RESULTADOS
-# ============================================================
-
-Write-Host "  MODS ENCONTRADOS" -ForegroundColor Cyan
-Write-Host ""
-
-foreach ($m in $modListSorted) {
-n    switch ($m.Categoria) {
-n        "ILEGAL" {
-            $symbol = "✕"
+    for ($i = 0; $i -le ($Data.Length - $Pattern.Length); $i++) {
+        $match = $true
+        for ($j = 0; $j -lt $Pattern.Length; $j++) {
+            if ($Data[$i + $j] -ne $Pattern[$j]) {
+                $match = $false
+                break
+            }
         }
-n        "SOSPECHOSO" {
-            $symbol = "!"
-        }
-n        default {
-            $symbol = "✓"
+        if ($match) {
+            return $true
         }
     }
-n    Write-Host "  $symbol " -NoNewline -ForegroundColor $m.Color
-    Write-Host "$($m.DisplayName)" -ForegroundColor White
-n    Write-Host "      Estado : " -NoNewline -ForegroundColor DarkGray
-    Write-Host "$($m.Estado)" -ForegroundColor $m.Color
-n    Write-Host "      Archivo: " -NoNewline -ForegroundColor DarkGray
-    Write-Host "$($m.Archivo)" -ForegroundColor DarkGray
-n    Write-Host ""
+    return $false
 }
 
-# ============================================================
-# GUARDADO
-# ============================================================
+function Search-ClassPattern {
+    param(
+        [byte[]]$Data,
+        [string]$Pattern
+    )
+    $text = [System.Text.Encoding]::ASCII.GetString($Data)
+    return $text.Contains($Pattern)
+}
 
-$outFile = Join-Path `
-    (Split-Path $modsPath -Parent) `
-    "analisis_mods.txt"
-
-$outContent = $modListSorted |
-    ForEach-Object {
-        "[$($_.Categoria)] $($_.DisplayName) - $($_.Estado) - $($_.Archivo)"
+function Test-DoomsdayJar {
+    param(
+        [string]$Path
+    )
+    try {        $data = [System.IO.File]::ReadAllBytes($Path)
     }
-
-$outContent |
-    Out-File `
-    -FilePath $outFile `
-    -Encoding utf8
+    catch {        return $false
+    }
+    $byteMatches = 0
+    $classMatches = 0
+    foreach ($hex in $script:KnownHexPatterns) {
+        $pattern = ConvertHex-ToBytes $hex
+        if (Search-BytePattern -Data $data -Pattern $pattern) {
+            $byteMatches++
+        }
+    }
+    foreach ($class in $script:KnownClassPatterns) {
+        if (Search-ClassPattern -Data $data -Pattern $class) {
+            $classMatches++
+        }
+    }
+    if ($byteMatches -ge 2) {
+        return $true
+    }
+    if ($byteMatches -ge 1 -and $classMatches -ge 5) {
+        return $true
+    }
+    if ($classMatches -ge 8) {
+        return $true
+    }
+    return $false
+}
 
 # ============================================================
-# ESTADO FINAL
+# DRIVES
 # ============================================================
 
-Write-Host "  ──────────────────────────────────────────────" -ForegroundColor DarkGray
-Write-Host ""
-
-if ($illegalCount -gt 0) {
-n    Write-Host "  ⚠ SE DETECTARON $illegalCount MOD(S) ILEGAL(ES)" -ForegroundColor Red
-}
-elseif ($suspiciousCount -gt 0) {
-n    Write-Host "  ! SE DETECTARON $suspiciousCount MOD(S) SOSPECHOSO(S)" -ForegroundColor Yellow
-}
-else {
-n    Write-Host "  ✓ NO SE DETECTARON MODS ILEGALES" -ForegroundColor Green
+function Get-ScanDrives {
+    return @(
+        Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
+        Select-Object -ExpandProperty DeviceID
+    )
 }
 
-Write-Host ""
-Write-Host "  Reporte guardado en:" -ForegroundColor DarkGray
-Write-Host "  $outFile" -ForegroundColor Cyan
-Write-Host ""
+# ============================================================
+# DOOMSDAY SCANNER
+# ============================================================
 
-Write-Host "  ══════════════════════════════════════════════" -ForegroundColor DarkCyan
-Write-Host "                 ANALISIS FINALIZADO" -ForegroundColor Cyan
-Write-Host "  ══════════════════════════════════════════════" -ForegroundColor DarkCyan
-Write-Host ""
-
-Read-Host "  Pulsa Enter para cerrar"
+function Start-DoomsdayScan {
+    Show-Title "DOOMSDAY SCANNER"
+    $drives = @(Get-ScanDrives)
+    if ($drives.Count -eq 0) {
+        Write-Host "  [!] No se encontraron unidades." -ForegroundColor Red
+        Pause-Scanner
+        return
+    }
+    Write-Host "  Unidades detectadas:" -ForegroundColor Cyan
+    Write-Host ""
+    foreach ($drive in $drives) {
+        Write-Host "  - $drive" -ForegroundColor White
+    }
+    Write-Host ""
+    foreach ($drive in $drives) {
+        $script:ScanInfo.DrivesAnalizados++
+        Write-Host "  Escaneando $drive ..." -ForegroundColor Cyan
+        try {            $files = Get-ChildItem -Path "$drive\" -File -Recurse -Force -ErrorAction SilentlyContinue
+            foreach ($file in $files) {
+                switch ($file.Extension.ToLower()) {
+                    ".exe" {                        $script:ScanInfo.EXEEncontrados++                    }
+                    ".dll" {
